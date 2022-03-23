@@ -43,7 +43,7 @@ pub struct Filesystem {
 }
 
 impl Filesystem {
-  fn new(drive_letter: OsString, bytes_per_cluster: u64, entry_count: usize) -> Self {
+  pub fn new(drive_letter: OsString, bytes_per_cluster: u64, entry_count: usize) -> Self {
     Filesystem {
       drive_letter: {
         let mut drive_letter = drive_letter.to_string_lossy().into_owned();
