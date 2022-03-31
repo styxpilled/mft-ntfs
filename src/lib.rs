@@ -4,10 +4,10 @@ mod privileges;
 mod volumes;
 
 #[cfg(feature = "progress")]
-use indicatif::{HumanDuration, ProgressBar, ProgressIterator};
-use winapi::um::{handleapi::CloseHandle, winnt::HANDLE};
+use indicatif::{HumanDuration, ProgressBar};
 
 use std::{collections::HashMap, convert::TryInto as _, ffi::OsString, ops::Deref};
+use winapi::um::{handleapi::CloseHandle, winnt::HANDLE};
 
 #[derive(Debug)]
 pub struct SafeHandle {
@@ -26,25 +26,16 @@ impl Drop for SafeHandle {
   }
 }
 
-pub struct Entry {
-  pub name: OsString,
-  pub path: String,
-  pub real_size: u64,
-  pub alloc_size: u64,
-  pub is_dir: bool,
-}
-
-pub struct Filesystem {
+pub struct Contructor {
   pub drive_letter: String,
   pub entries: HashMap<u64, mft::MftEntry>,
   pub entrylist: Vec<u64>,
-  pub files: HashMap<String, Entry>,
-  bytes_per_cluster: u64,
+  pub bytes_per_cluster: u64,
 }
 
-impl Filesystem {
+impl Contructor {
   pub fn new(drive_letter: OsString, bytes_per_cluster: u64, entry_count: usize) -> Self {
-    Filesystem {
+    Contructor {
       drive_letter: {
         let mut drive_letter = drive_letter.to_string_lossy().into_owned();
         if drive_letter.ends_with('\\') {
@@ -54,7 +45,6 @@ impl Filesystem {
       },
       entries: HashMap::with_capacity(entry_count),
       entrylist: Vec::with_capacity(entry_count),
-      files: HashMap::with_capacity(entry_count),
       bytes_per_cluster,
     }
   }
@@ -85,16 +75,37 @@ impl Filesystem {
 
     Some(result)
   }
-
   fn add_entry(&mut self, entry: mft::MftEntry) {
     self.entrylist.push(entry.base_record_segment_idx);
     self.entries.insert(entry.base_record_segment_idx, entry);
   }
+}
 
-  fn add_fs_entry(&mut self, entry: &u64) {
-    let mut entry = self.entries.get(&entry).unwrap();
+#[derive(Clone)]
+pub struct Entry {
+  pub name: OsString,
+  pub path: String,
+  pub real_size: u64,
+  pub alloc_size: u64,
+  pub is_dir: bool,
+}
+
+#[derive(Clone)]
+pub struct Filesystem {
+  pub files: HashMap<String, Entry>,
+}
+
+impl Filesystem {
+  pub fn new() -> Self {
+    Filesystem {
+      files: HashMap::new(),
+    }
+  }
+
+  fn add_fs_entry(&mut self, entry: u64, constructor: &Contructor) {
+    let mut entry = constructor.entries.get(&entry).unwrap();
     let mut real_size = 0;
-    let alloc_size = entry.get_allocated_size(self.bytes_per_cluster);
+    let alloc_size = entry.get_allocated_size(constructor.bytes_per_cluster);
     let id = entry.base_record_segment_idx;
     let name = entry.get_best_filename().unwrap_or(OsString::from(""));
     let parents = entry.parents();
@@ -103,7 +114,7 @@ impl Filesystem {
       real_size += entry.data[i].logical_size;
     }
 
-    let path = self.get_full_path(id).unwrap();
+    let path = constructor.get_full_path(id).unwrap();
 
     self
       .files
@@ -128,13 +139,13 @@ impl Filesystem {
       if parents.len() == 0 {
         break;
       } else if parents[0] != entry.base_record_segment_idx {
-        let name = self
+        let name = constructor
           .entries
           .get(&parents[0])
           .unwrap()
           .get_best_filename()
           .unwrap();
-        let path = self.get_full_path(parents[0]).unwrap();
+        let path = constructor.get_full_path(parents[0]).unwrap();
         self
           .files
           .entry(path.clone())
@@ -149,20 +160,20 @@ impl Filesystem {
             alloc_size,
             is_dir: true,
           });
-        entry = &*self.entries.get(&parents[0]).unwrap();
+        entry = constructor.entries.get(&parents[0]).unwrap();
       } else {
         break;
       }
     }
 
     if parents.len() != 0 {
-      let name = self
+      let name = constructor
         .entries
         .get(&parents[0])
         .unwrap()
         .get_best_filename()
         .unwrap();
-      let path = self.get_full_path(parents[0]).unwrap();
+      let path = constructor.get_full_path(parents[0]).unwrap();
       self
         .files
         .entry(path.clone())
@@ -179,62 +190,63 @@ impl Filesystem {
         });
     }
   }
+
+  fn handle_volume(&mut self, volume: volumes::VolumeInfo) {
+    #[cfg(feature = "progress")]
+    println!("Reading {}...", volume.paths[0].to_string_lossy());
+    #[cfg(feature = "progress")]
+    let begin = std::time::Instant::now();
+
+    let handle = volume.get_handle().unwrap();
+    let (mft, bytes_per_cluster) = mft::MasterFileTable::load(handle, &volume.paths[0]).unwrap();
+
+    #[cfg(feature = "progress")]
+    let entry_count = mft.entry_count();
+
+    let mut constructor = Contructor::new(
+      volume.paths[0].clone(),
+      bytes_per_cluster,
+      mft.entry_count().try_into().unwrap(),
+    );
+
+    #[cfg(feature = "progress")]
+    let progress = ProgressBar::new(entry_count);
+    #[cfg(feature = "progress")]
+    progress.set_draw_delta(entry_count / 20);
+
+    for entry in mft {
+      constructor.add_entry(entry.unwrap());
+      #[cfg(feature = "progress")]
+      progress.inc(1);
+    }
+
+    #[cfg(feature = "progress")]
+    println!("Creating queryable filesystem");
+    #[cfg(feature = "progress")]
+    let progress = ProgressBar::new(entry_count);
+    #[cfg(feature = "progress")]
+    progress.set_draw_delta(entry_count / 20);
+
+    for entry in constructor.entrylist.clone() {
+      self.add_fs_entry(entry, &constructor);
+
+      #[cfg(feature = "progress")]
+      progress.inc(1);
+    }
+    
+    #[cfg(feature = "progress")]
+    let time_taken = begin.elapsed();
+    #[cfg(feature = "progress")]
+    println!(
+      "Read {} MFT entries in {} ({:.0} entries/sec)",
+      entry_count,
+      HumanDuration(time_taken),
+      1000f64 * (entry_count as f64) / (time_taken.as_millis() as f64)
+    );
+  }
 }
 
-fn handle_volume(volume: volumes::VolumeInfo) -> Result<Filesystem, err::Error> {
-  #[cfg(feature = "progress")]
-  println!("Reading {}...", volume.paths[0].to_string_lossy());
-
-  #[cfg(feature = "progress")]
-  let begin = std::time::Instant::now();
-  
-  let handle = volume.get_handle()?;
-  let (mft, bytes_per_cluster) = mft::MasterFileTable::load(handle, &volume.paths[0])?;
-  
-  #[cfg(feature = "progress")]
-  let entry_count = mft.entry_count();
-
-  let mut filesystem = Filesystem::new(
-    volume.paths[0].clone(),
-    bytes_per_cluster,
-    mft.entry_count().try_into().unwrap(),
-  );
-
-  #[cfg(feature = "progress")]
-  let progress = ProgressBar::new(entry_count);
-  #[cfg(feature = "progress")]
-  progress.set_draw_delta(entry_count / 20);
-  for entry in mft {
-    filesystem.add_entry(entry?);
-    #[cfg(feature = "progress")]
-    progress.inc(1);
-  }
-
-  #[cfg(feature = "progress")]
-  println!("Creating queryable filesystem");
-  #[cfg(feature = "progress")]
-  let progress = ProgressBar::new(entry_count);
-  #[cfg(feature = "progress")]
-  progress.set_draw_delta(entry_count / 20);
-  for entry in filesystem.entrylist.clone() {
-    filesystem.add_fs_entry(&entry);
-    #[cfg(feature = "progress")]
-    progress.inc(1);
-  }
-
-  #[cfg(feature = "progress")]
-  let time_taken = begin.elapsed();
-  #[cfg(feature = "progress")]
-  println!(
-    "Read {} MFT entries in {} ({:.0} entries/sec)",
-    entry_count,
-    HumanDuration(time_taken),
-    1000f64 * (entry_count as f64) / (time_taken.as_millis() as f64)
-  );
-  Ok(filesystem)
-}
-
-pub fn main(drive_letters: Option<Vec<char>>) -> Result<Vec<Filesystem>, err::Error> {
+pub fn main(drive_letters: Option<Vec<char>>) -> Result<Filesystem, err::Error> {
   match privileges::has_sufficient_privileges() {
     Ok(true) => {}
     Ok(false) => {
@@ -246,7 +258,7 @@ pub fn main(drive_letters: Option<Vec<char>>) -> Result<Vec<Filesystem>, err::Er
     }
   }
 
-  let mut result = Vec::new();
+  let mut filesystem = Filesystem::new();
   for volume in volumes::VolumeIterator::new().unwrap() {
     match volume {
       Ok(volume) => {
@@ -265,14 +277,8 @@ pub fn main(drive_letters: Option<Vec<char>>) -> Result<Vec<Filesystem>, err::Er
             }
           }
 
-          match handle_volume(volume) {
-            Ok(volume) => {
-              result.push(volume);
-            }
-            Err(err) => {
-              eprintln!("Failed to process volume: {:?}", err);
-            }
-          }
+          // let mut filesystem = Filesystem::new();
+          filesystem.handle_volume(volume);
         }
       }
       Err(err) => {
@@ -280,5 +286,5 @@ pub fn main(drive_letters: Option<Vec<char>>) -> Result<Vec<Filesystem>, err::Er
       }
     }
   }
-  Ok(result)
+  Ok(filesystem)
 }
