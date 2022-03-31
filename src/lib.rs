@@ -29,7 +29,6 @@ impl Drop for SafeHandle {
 pub struct Contructor {
   pub drive_letter: String,
   pub entries: HashMap<u64, mft::MftEntry>,
-  pub entrylist: Vec<u64>,
   pub bytes_per_cluster: u64,
 }
 
@@ -44,7 +43,6 @@ impl Contructor {
         drive_letter
       },
       entries: HashMap::with_capacity(entry_count),
-      entrylist: Vec::with_capacity(entry_count),
       bytes_per_cluster,
     }
   }
@@ -76,7 +74,6 @@ impl Contructor {
     Some(result)
   }
   fn add_entry(&mut self, entry: mft::MftEntry) {
-    self.entrylist.push(entry.base_record_segment_idx);
     self.entries.insert(entry.base_record_segment_idx, entry);
   }
 }
@@ -103,20 +100,19 @@ impl Filesystem {
   }
 
   fn add_fs_entry(&mut self, entry: u64, constructor: &Contructor) {
-    let mut entry = constructor.entries.get(&entry).unwrap();
+    let entry = constructor.entries.get(&entry).unwrap();
     let mut real_size = 0;
     let alloc_size = entry.get_allocated_size(constructor.bytes_per_cluster);
     let id = entry.base_record_segment_idx;
     let name = entry.get_best_filename().unwrap_or(OsString::from(""));
-    let parents = entry.parents();
 
     for i in 0..entry.data.len() {
       real_size += entry.data[i].logical_size;
     }
 
-    let path = constructor.get_full_path(id).unwrap();
+    let mut path = constructor.get_full_path(id).unwrap();
 
-    self
+    let file = self
       .files
       .entry(path.clone())
       .and_modify(|file| {
@@ -133,19 +129,26 @@ impl Filesystem {
         is_dir: false,
       });
 
+    if file.is_dir {
+      return;
+    };
     loop {
-      let parents = entry.parents();
+      let to_split = String::from(path.clone());
+      let mut split = to_split.rsplitn(2, '\\');
+      let name = split.next();
+      let possible_path = split.next();
 
-      if parents.len() == 0 {
+      if possible_path.is_none() || name.is_none() {
         break;
-      } else if parents[0] != entry.base_record_segment_idx {
-        let name = constructor
-          .entries
-          .get(&parents[0])
-          .unwrap()
-          .get_best_filename()
-          .unwrap();
-        let path = constructor.get_full_path(parents[0]).unwrap();
+      }
+      path = possible_path.unwrap().to_string();
+
+      let name = OsString::from(name.unwrap());
+
+      if path.clone() == "\\" {
+        break;
+      }
+      else {
         self
           .files
           .entry(path.clone())
@@ -155,39 +158,12 @@ impl Filesystem {
           })
           .or_insert(Entry {
             name,
-            path,
+            path: path.clone(),
             real_size,
             alloc_size,
             is_dir: true,
           });
-        entry = constructor.entries.get(&parents[0]).unwrap();
-      } else {
-        break;
       }
-    }
-
-    if parents.len() != 0 {
-      let name = constructor
-        .entries
-        .get(&parents[0])
-        .unwrap()
-        .get_best_filename()
-        .unwrap();
-      let path = constructor.get_full_path(parents[0]).unwrap();
-      self
-        .files
-        .entry(path.clone())
-        .and_modify(|file| {
-          file.real_size += real_size;
-          file.is_dir = true;
-        })
-        .or_insert(Entry {
-          name,
-          path,
-          real_size,
-          alloc_size,
-          is_dir: true,
-        });
     }
   }
 
@@ -227,13 +203,13 @@ impl Filesystem {
     #[cfg(feature = "progress")]
     progress.set_draw_delta(entry_count / 20);
 
-    for entry in constructor.entrylist.clone() {
-      self.add_fs_entry(entry, &constructor);
+    for (id, _entry) in constructor.entries.clone() {
+      self.add_fs_entry(id, &constructor);
 
       #[cfg(feature = "progress")]
       progress.inc(1);
     }
-    
+
     #[cfg(feature = "progress")]
     let time_taken = begin.elapsed();
     #[cfg(feature = "progress")]
@@ -276,8 +252,6 @@ pub fn main(drive_letters: Option<Vec<char>>) -> Result<Filesystem, err::Error> 
               continue;
             }
           }
-
-          // let mut filesystem = Filesystem::new();
           filesystem.handle_volume(volume);
         }
       }

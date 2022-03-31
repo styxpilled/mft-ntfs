@@ -251,7 +251,7 @@ mod standard_info_flags {
     pub const INDEX_VIEW: u32 = 0x2000_0000;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StandardFlags {
     pub is_read_only: bool,
     pub is_hidden: bool,
@@ -292,7 +292,7 @@ impl From<u32> for StandardFlags {
 }
 
 // read-only, timestamps, hard link count, etc
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct StandardInformation {
     pub name: Option<OsString>,
@@ -337,7 +337,7 @@ pub enum FileNameType {
 // One of the names of the file.
 // Note: the fields of this, except parent, are only updated by
 // Windows when the file's name changes.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct FileName {
     // name OF THE ATTRIBUTE, not the file name
@@ -380,13 +380,13 @@ impl FileName {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DataRun {
     pub starting_lcn: i64,
     pub cluster_count: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Data {
     pub name: Option<OsString>,

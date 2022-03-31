@@ -33,7 +33,7 @@ use stream::MftStream;
 const NTFS_VOLUME_DATA_BUFFER_SIZE: usize =
     mem::size_of::<NTFS_VOLUME_DATA_BUFFER>() + mem::size_of::<NTFS_EXTENDED_VOLUME_DATA>();
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MftEntry {
     pub base_record_segment_idx: u64,
     pub hard_link_count: u16,
