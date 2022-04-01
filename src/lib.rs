@@ -147,8 +147,7 @@ impl Filesystem {
 
       if path.clone() == "\\" {
         break;
-      }
-      else {
+      } else {
         self
           .files
           .entry(path.clone())
@@ -220,6 +219,26 @@ impl Filesystem {
       1000f64 * (entry_count as f64) / (time_taken.as_millis() as f64)
     );
   }
+}
+
+pub fn get_drive_list() -> Vec<OsString> {
+  let volumes = volumes::VolumeIterator::new().unwrap();
+  let mut output = Vec::new();
+
+  for volume in volumes {
+    match volume {
+      Ok(volume) => {
+        for path in volume.paths {
+          output.push(path);
+        }
+      }
+      Err(err) => {
+        eprintln!("VolumeIterator produced an error: {:?}", err);
+      }
+    }
+  }
+
+  output
 }
 
 pub fn main(drive_letters: Option<Vec<char>>) -> Result<Filesystem, err::Error> {
