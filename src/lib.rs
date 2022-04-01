@@ -238,6 +238,7 @@ pub fn get_drive_list() -> Vec<OsString> {
     }
   }
 
+  output.reverse();
   output
 }
 
