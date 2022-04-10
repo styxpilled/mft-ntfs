@@ -19,6 +19,7 @@ lto = true
 
 [dependencies]
 indicatif = { version = "0.15", optional = true }
+serde = { version = "1.0.136", features = ["derive"] }
 winapi = { version = "0.3", features = [
     "errhandlingapi",
     "handleapi",

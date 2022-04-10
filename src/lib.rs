@@ -9,6 +9,8 @@ use indicatif::{HumanDuration, ProgressBar};
 use std::{collections::HashMap, convert::TryInto as _, ffi::{OsString, OsStr}, ops::Deref, path::PathBuf};
 use winapi::um::{handleapi::CloseHandle, winnt::HANDLE};
 
+use serde::{Serialize, Deserialize};
+
 #[derive(Debug)]
 pub struct SafeHandle {
   handle: HANDLE,
@@ -78,7 +80,7 @@ impl Contructor {
   }
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Entry {
   pub name: OsString,
   pub path: String,
@@ -87,7 +89,7 @@ pub struct Entry {
   pub is_dir: bool,
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TestEntry {
   pub name: PathBuf,
   pub path: PathBuf,
@@ -97,7 +99,7 @@ pub struct TestEntry {
   pub children: Option<Vec<TestEntry>>,
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Filesystem {
   pub files: HashMap<String, Entry>,
   pub dirs: HashMap<String, TestEntry>,
