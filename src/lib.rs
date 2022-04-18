@@ -6,7 +6,7 @@ mod volumes;
 #[cfg(feature = "progress")]
 use indicatif::{HumanDuration, ProgressBar};
 
-use std::{collections::HashMap, convert::TryInto as _, ffi::OsString, ops::Deref};
+use std::{collections::HashMap, convert::TryInto as _, ffi::{OsString, OsStr}, ops::Deref, path::PathBuf};
 use winapi::um::{handleapi::CloseHandle, winnt::HANDLE};
 
 #[derive(Debug)]
@@ -88,14 +88,26 @@ pub struct Entry {
 }
 
 #[derive(Clone)]
+pub struct TestEntry {
+  pub name: PathBuf,
+  pub path: PathBuf,
+  pub is_dir: bool,
+  pub real_size: u64,
+  pub alloc_size: u64,
+  pub children: Option<Vec<TestEntry>>,
+}
+
+#[derive(Clone)]
 pub struct Filesystem {
   pub files: HashMap<String, Entry>,
+  pub dirs: HashMap<String, TestEntry>,
 }
 
 impl Filesystem {
   pub fn new() -> Self {
     Filesystem {
       files: HashMap::new(),
+      dirs: HashMap::new(),
     }
   }
 
@@ -166,6 +178,45 @@ impl Filesystem {
     }
   }
 
+  fn add_dir_entry(&mut self, original_path: String, entry: Entry) {
+    let path = PathBuf::from(original_path.clone());
+    let parent = path.parent();
+    if parent.is_some() {
+      let parent = parent.unwrap();
+      self
+        .dirs
+        .entry(parent.to_string_lossy().into_owned())
+        .and_modify(|file| {
+          file.real_size += entry.real_size;
+          let mut updated = file.children.clone().unwrap_or(Vec::new());
+          updated.push(TestEntry {
+            name: PathBuf::from(path.clone().file_name().unwrap()),
+            path: path.clone(),
+            is_dir: entry.is_dir,
+            real_size: entry.real_size,
+            alloc_size: entry.alloc_size,
+            children: None,
+          });
+          file.children = Some(updated);
+        })
+        .or_insert(TestEntry {
+          name: PathBuf::from(parent.file_name().unwrap_or(OsStr::new(""))),
+          path: PathBuf::from(parent.clone()),
+          is_dir: true,
+          real_size: entry.real_size,
+          alloc_size: entry.alloc_size,
+          children: Some(vec![TestEntry {
+            name: PathBuf::from(path.clone().file_name().unwrap()),
+            path: path.clone(),
+            is_dir: entry.is_dir,
+            real_size: entry.real_size,
+            alloc_size: entry.alloc_size,
+            children: None,
+          }]),
+        });
+    }
+  }
+
   fn handle_volume(&mut self, volume: volumes::VolumeInfo) {
     #[cfg(feature = "progress")]
     println!("Reading {}...", volume.paths[0].to_string_lossy());
@@ -208,6 +259,10 @@ impl Filesystem {
       #[cfg(feature = "progress")]
       progress.inc(1);
     }
+
+    // for (id, entry) in self.files.clone() {
+    //   self.add_dir_entry(id, entry);
+    // }
 
     #[cfg(feature = "progress")]
     let time_taken = begin.elapsed();
